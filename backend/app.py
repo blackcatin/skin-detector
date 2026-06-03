@@ -4,9 +4,12 @@ import numpy as np
 import uuid
 import os
 import time
+import shutil  # Tambahan untuk Full Zero-Storage Cleanup
 
-from fastapi import FastAPI, File, UploadFile
+from pydantic import BaseModel
+from fastapi import FastAPI, File, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from PIL import Image
 
 import torch
@@ -164,12 +167,31 @@ class_labels = [
     "Warts, Molluscum & other Viral Infections"
 ]
 
+# Pydantic schema untuk request hapus file
+class DeleteFileRequest(BaseModel):
+    raw_image: str
+    processed_image: str
+
 # ===============================
 # ROOT ENDPOINT
 # ===============================
 @app.get("/")
 def root():
     return {"message": "Skin Detector API aktif 🚀", "active_model": MODEL_VERSION}
+
+# ===============================
+# DOWNLOAD MODEL ENDPOINT (FOR n8n CLOUD SYNC)
+# ===============================
+@app.get("/download-model/{filename}")
+def download_model(filename: str):
+    """
+    Endpoint agar n8n (di dalam Docker) bisa mengunduh file biner .pth 
+    secara lokal dan mengunggahnya langsung ke Google Drive.
+    """
+    file_path = os.path.join(CURRENT_DIR, "trained_models", filename)
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="application/octet-stream", filename=filename)
+    return {"error": f"File {filename} tidak ditemukan di trained_models."}
 
 # ===============================
 # PREDICT ENDPOINT
@@ -188,11 +210,12 @@ async def predict(file: UploadFile = File(...)):
         image_cv = cv2.imread(raw_filepath)
         quality_data = analyze_image_quality(image_cv)
 
-        blur_score = quality_data["blur_score"]
-        brightness_score = quality_data["brightness_score"]
-        quality_score = quality_data["quality_score"]
+        # Memastikan konversi tipe data ke float standar Python untuk menghindari JSON error
+        blur_score = float(quality_data["blur_score"])
+        brightness_score = float(quality_data["brightness_score"])
+        quality_score = float(quality_data["quality_score"])
         
-        is_valid = validate_image(image_cv, blur_score, brightness_score)
+        is_valid = bool(validate_image(image_cv, blur_score, brightness_score))
 
         # 2. Preprocess Gambar Utama
         processed_filepath = preprocess_image(raw_filepath, PROCESSED_FOLDER)
@@ -218,9 +241,9 @@ async def predict(file: UploadFile = File(...)):
             processed_image_path=processed_filepath,
             predicted_class=result,
             confidence=round(confidence_percentage, 2),
-            blur_score=float(blur_score),
-            brightness_score=float(brightness_score),
-            quality_score=float(quality_score),
+            blur_score=blur_score,
+            brightness_score=brightness_score,
+            quality_score=quality_score,
             is_valid=is_valid,
             model_version=MODEL_VERSION,
             used_for_retraining=False
@@ -229,21 +252,41 @@ async def predict(file: UploadFile = File(...)):
         db.commit()
         db.close()
 
+        # RETURN UTAMA: Pastikan semua data quality dilempar keluar dengan bersih
         return {
             "predicted_class": result,
             "confidence": round(confidence_percentage, 2),
             "raw_image": raw_filepath,
             "processed_image": processed_filepath,
             "quality": {
-                "blur_score": round(float(blur_score), 2),
-                "brightness_score": round(float(brightness_score), 2),
-                "quality_score": round(float(quality_score), 2),
+                "blur_score": round(blur_score, 2),
+                "brightness_score": round(brightness_score, 2),
+                "quality_score": round(quality_score, 2),
                 "is_valid_for_training": is_valid
             }
         }
 
     except Exception as e:
         return {"error": str(e)}
+
+# ===============================
+# DELETE LOCAL IMAGE ENDPOINT (ZERO STORAGE)
+# ===============================
+@app.post("/v1/delete-local")
+async def delete_local_file(payload: DeleteFileRequest, background_tasks: BackgroundTasks):
+
+    file_list = [payload.raw_image, payload.processed_image]
+
+    def remove_file(path: str):
+        if os.path.exists(path):
+            os.remove(path)
+            print("deleted:", path)
+
+    for path in file_list:
+        if path and "uploads" in path:
+            background_tasks.add_task(remove_file, path)
+
+    return {"status": "success"}
 
 # ===============================
 # RETRAINING ENDPOINT (AUTOMATED)
@@ -307,7 +350,7 @@ async def trigger_retraining():
         
         # 5. Update Model Registry (Mencatat Log Akurasi Otomatis ke JSON)
         model_accuracy = "74.20%" 
-        model_time = time.strftime("%Y-%m-%d %H:%M:%S") # Fallback waktu jika registry bermasalah
+        model_time = time.strftime("%Y-%m-%d %H:%M:%S") 
         try:
             registry_data = update_model_path(
                 new_model_path=new_model_path,
@@ -318,7 +361,7 @@ async def trigger_retraining():
                 execution_time=execution_time
             )
             model_accuracy = registry_data["accuracy"]
-            model_time = registry_data["retrained_at"] # <--- AMBIL WAKTU RIIL DARI REGISTRY
+            model_time = registry_data["retrained_at"] 
         except Exception as registry_error:
             print(f"⚠️ Catatan Registry gagal: {registry_error}")
             
@@ -329,20 +372,22 @@ async def trigger_retraining():
         db.commit()
         db.close()
         
-        # =====================================================================
-        # 6. Kembalikan respons metrik lengkap untuk Google Sheets n8n (FIXED)
-        # =====================================================================
+        # 6. STRATEGI FULL CLOUD RETRAINING: Hapus folder retraining lokal setelah selesai training
+        if os.path.exists(RETRAINING_BASE_FOLDER):
+            shutil.rmtree(RETRAINING_BASE_FOLDER)
+            print("🗑️ [Full Cloud Cleanup] Folder retraining lokal berhasil dimusnahkan!")
+        
         return {
             "status": "success",
             "message": f"Retraining selesai menggunakan {len(new_samples)} data.",
             "version": NEW_MODEL_VERSION,
-            "model_path": os.path.basename(new_model_path),       # Hasil: Fix_best_model_v4.pth
+            "model_path": os.path.basename(new_model_path),
             "model_version": NEW_MODEL_VERSION,
             "accuracy": model_accuracy,
             "final_loss": training_result["final_loss"],
             "total_data_retrain": training_result["total_data_retrain"],
             "execution_time": execution_time,
-            "dataset_saved_at": RETRAINING_BASE_FOLDER,
+            "dataset_saved_at": "Google Drive Cloud Storage",  # Informasi sinkronisasi cloud
             "retrained_at": model_time, 
             "error": ""
         }
@@ -350,6 +395,9 @@ async def trigger_retraining():
     except Exception as e:
         if 'db' in locals():
             db.close()
+        # Pastikan folder tetap dibersihkan jika training crash di tengah jalan
+        if os.path.exists(RETRAINING_BASE_FOLDER):
+            shutil.rmtree(RETRAINING_BASE_FOLDER)
         return {
             "status": "failed",
             "message": "Retraining gagal",

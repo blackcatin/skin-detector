@@ -1,104 +1,49 @@
-import os
 import cv2
+import os
 import numpy as np
 
-
-# ==========================
-# LOAD IMAGE
-# ==========================
-
-def load_image(image_path):
-    image = cv2.imread(image_path)
-
-    if image is None:
-        raise ValueError(f"Gagal membaca gambar: {image_path}")
-
-    return image
+def denoise(image):
+    return cv2.fastNlMeansDenoisingColored(image, None, 5, 5, 7, 21)
 
 
-# ==========================
-# DENOISING
-# ==========================
-
-def apply_denoising(image):
-    return cv2.fastNlMeansDenoisingColored(
-        image,
-        None,
-        5,
-        5,
-        7,
-        21
-    )
-
-
-# ==========================
-# CLAHE
-# ==========================
-
-def apply_clahe(image):
+def clahe(image):
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-
     l, a, b = cv2.split(lab)
 
-    clahe = cv2.createCLAHE(
-        clipLimit=2.0,
-        tileGridSize=(8, 8)
-    )
+    c = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = c.apply(l)
 
-    l = clahe.apply(l)
-
-    merged = cv2.merge((l, a, b))
-
-    return cv2.cvtColor(
-        merged,
-        cv2.COLOR_LAB2BGR
-    )
+    return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
 
 
-# ==========================
-# RESIZE
-# ==========================
-
-def resize_image(image, size=(224, 224)):
+def resize(image, size=(224, 224)):
     return cv2.resize(image, size)
 
-# ==========================
-# SAVE IMAGE
-# ==========================
+def preprocess_pipeline(image: np.ndarray) -> np.ndarray:
+    image = denoise(image)
+    image = clahe(image)
+    image = resize(image)
+    return image
 
-def save_processed_image(image, output_path):
+def load_image(path):
+    img = cv2.imread(path)
+    if img is None:
+        raise ValueError("Image corrupt")
+    return img
+
+
+def save_image(image, output_path):
     cv2.imwrite(output_path, image)
 
-
-# ==========================
-# MAIN PIPELINE
-# ==========================
-
-def preprocess_image(
-    input_path,
-    processed_folder="uploads/processed"
-):
-    
-    os.makedirs(processed_folder, exist_ok=True)
+def preprocess_image(input_path, output_folder):
+    os.makedirs(output_folder, exist_ok=True)
 
     image = load_image(input_path)
-
-    image = apply_denoising(image)
-
-    image = apply_clahe(image)
-
-    image = resize_image(image)
+    processed = preprocess_pipeline(image)
 
     filename = os.path.basename(input_path)
+    output_path = os.path.join(output_folder, filename)
 
-    output_path = os.path.join(
-        processed_folder,
-        filename
-    )
-
-    save_processed_image(
-        image,
-        output_path
-    )
+    save_image(processed, output_path)
 
     return output_path

@@ -6,7 +6,9 @@ const SkinDiseasePredictor = () => {
   const [prediction, setPrediction] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showParticles, setShowParticles] = useState(false);
-  const [imageData, setImageData] = useState(null);
+  // 🟢 SEHAT: State qualityData dideklarasikan di scope utama agar dibaca oleh ESLint compiler
+  const [qualityData, setQualityData] = useState(null);
+
   const fileInputRef = useRef(null);
   const canvasRef = useRef(null);
 
@@ -283,11 +285,11 @@ const SkinDiseasePredictor = () => {
       reader.onload = (e) => {
         setSelectedImage(e.target.result);
         setPrediction(null);
-        
+        setQualityData(null); // Reset data kualitas saat upload baru
+
         // Create image element untuk analisis
         const img = new Image();
         img.onload = () => {
-          setImageData(img);
         };
         img.src = e.target.result;
       };
@@ -296,14 +298,15 @@ const SkinDiseasePredictor = () => {
   };
 
   const simulatePrediction = async () => {
-    if (!fileInputRef.current?.files[0]) return;
+    if (!fileInputRef.current?.files?.[0]) return;
     setIsLoading(true);
 
     try {
       const formData = new FormData();
       formData.append("file", fileInputRef.current.files[0]);
 
-      const res = await fetch("http://127.0.0.1:8000/predict/", {
+      // 🟢 KUNCI INTERGASI: Menembak Webhook n8n yang bertindak sebagai orkestrator data
+      const res = await fetch("http://localhost:5678/webhook/predict_image", {
         method: "POST",
         body: formData,
       });
@@ -311,17 +314,26 @@ const SkinDiseasePredictor = () => {
       if (!res.ok) throw new Error("Failed to get prediction");
 
       const data = await res.json();
-      
-      // Map backend response to frontend key
+      console.log("DATA DARI N8N:", data);
+
       const mappedDisease = backendToFrontendMapping[data.predicted_class] || data.predicted_class;
-      
+
       setPrediction({
         disease: mappedDisease,
         confidence: data.confidence || 100,
       });
+
+      // 🟢 KUNCI DATA QUALITY: Menangkap hasil mapping Custom Body dari n8n ke dalam state React
+      setQualityData({
+        blurScore: data.blur_score || 0,
+        brightnessScore: data.brightness_score || 0,
+        qualityScore: data.quality_score || 0,
+        isValidForTraining: data.is_valid_for_training ?? true
+      });
+
     } catch (error) {
       console.error("Prediction error:", error);
-      alert("Gagal melakukan prediksi. Pastikan backend sudah jalan.");
+      alert("Gagal melakukan prediksi. Pastikan n8n berjalan & webhook aktif.");
     }
 
     setIsLoading(false);
@@ -330,13 +342,14 @@ const SkinDiseasePredictor = () => {
   const resetApp = () => {
     setSelectedImage(null);
     setPrediction(null);
-    setImageData(null);
+    setQualityData(null); // Bersihkan data kualitas saat reset
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
   const getSeverityColor = (severity) => {
+    if (!severity) return 'text-green-500';
     if (severity.includes('Tinggi') || severity.includes('Darurat')) return 'text-red-500';
     if (severity.includes('Sedang')) return 'text-yellow-500';
     return 'text-green-500';
@@ -355,9 +368,8 @@ const SkinDiseasePredictor = () => {
             animationDuration: `${3 + Math.random() * 2}s`
           }}
         >
-          <div className={`w-1 h-1 rounded-full ${
-            Math.random() > 0.5 ? 'bg-blue-400' : 'bg-purple-400'
-          } opacity-30`} />
+          <div className={`w-1 h-1 rounded-full ${Math.random() > 0.5 ? 'bg-blue-400' : 'bg-purple-400'
+            } opacity-30`} />
         </div>
       ))}
     </div>
@@ -409,7 +421,7 @@ const SkinDiseasePredictor = () => {
                 </div>
                 Upload Gambar Kulit
               </h2>
-              
+
               <div className="relative">
                 <input
                   ref={fileInputRef}
@@ -418,7 +430,7 @@ const SkinDiseasePredictor = () => {
                   onChange={handleImageUpload}
                   className="hidden"
                 />
-                
+
                 <div
                   onClick={() => fileInputRef.current?.click()}
                   className="relative group cursor-pointer"
@@ -460,7 +472,7 @@ const SkinDiseasePredictor = () => {
                       </div>
                     </div>
                   </div>
-                  
+
                   {!prediction && (
                     <div className="mt-6 relative">
                       <button
@@ -502,8 +514,9 @@ const SkinDiseasePredictor = () => {
                   </div>
                   Hasil Analisis AI
                 </h2>
-                
-                <div className={`bg-gradient-to-br ${diseaseInfo[prediction.disease]?.bgColor} rounded-2xl p-8 border-2 border-white/30 shadow-2xl relative overflow-hidden`}>
+
+                {/* KOTAK UNGU ATAS: DIAGNOSIS & CONFIDENCE */}
+                <div className={`bg-gradient-to-br ${diseaseInfo[prediction.disease]?.bgColor || 'from-slate-800 to-slate-700'} rounded-2xl p-8 border-2 border-white/30 shadow-2xl relative overflow-hidden mb-6`}>
                   <div className="absolute top-0 right-0 p-4">
                     <div className="flex space-x-1">
                       <Star className="h-4 w-4 text-yellow-400 animate-pulse" />
@@ -511,7 +524,7 @@ const SkinDiseasePredictor = () => {
                       <Star className="h-4 w-4 text-yellow-400 animate-pulse delay-200" />
                     </div>
                   </div>
-                  
+
                   <div className="flex items-center justify-between mb-6">
                     <h3 className="text-2xl font-black text-gray-800">DIAGNOSIS:</h3>
                     <div className={`px-4 py-2 rounded-full font-bold text-sm ${getSeverityColor(diseaseInfo[prediction.disease]?.severity || '')} bg-white/50`}>
@@ -519,11 +532,11 @@ const SkinDiseasePredictor = () => {
                       {diseaseInfo[prediction.disease]?.severity || 'Unknown'}
                     </div>
                   </div>
-                  
-                  <p className={`text-3xl font-black bg-gradient-to-r ${diseaseInfo[prediction.disease]?.color} bg-clip-text text-transparent mb-6`}>
+
+                  <p className={`text-3xl font-black bg-gradient-to-r ${diseaseInfo[prediction.disease]?.color || 'from-cyan-400 to-blue-500'} bg-clip-text text-transparent mb-6`}>
                     {diseaseInfo[prediction.disease]?.name || prediction.disease}
                   </p>
-                  
+
                   <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 mb-6 shadow-xl">
                     <div className="flex items-center justify-between mb-4">
                       <span className="text-gray-800 font-bold text-lg">Tingkat Keyakinan AI:</span>
@@ -531,7 +544,7 @@ const SkinDiseasePredictor = () => {
                     </div>
                     <div className="relative w-full bg-gray-200 rounded-full h-6 overflow-hidden">
                       <div
-                        className={`h-6 rounded-full transition-all duration-2000 bg-gradient-to-r from-emerald-400 via-cyan-500 to-purple-500 relative`}
+                        className="h-6 rounded-full transition-all duration-2000 bg-gradient-to-r from-emerald-400 via-cyan-500 to-purple-500 relative"
                         style={{ width: `${prediction.confidence}%` }}
                       >
                         <div className="absolute inset-0 bg-white/30 animate-pulse"></div>
@@ -551,6 +564,42 @@ const SkinDiseasePredictor = () => {
                     </div>
                   </div>
                 </div>
+
+                {/* KOTAK PUTIH BAWAH: WIDGET ANALISIS KUALITAS SINKRON WORKFLOW (true/false) */}
+                <div className="bg-white/90 rounded-2xl p-6 shadow-xl border border-gray-200 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className="bg-purple-100 p-2 rounded-xl text-purple-600">
+                        <Sparkles className="h-5 w-5 animate-pulse" />
+                      </div>
+                      <div>
+                        <h4 className="text-slate-800 font-black text-lg">Hasil Analisis Kualitas Gambar</h4>
+                        {qualityData && (
+                          <p className="text-xs text-slate-500 font-bold mt-0.5 tracking-wide">
+                            Blur: {qualityData.blurScore.toFixed(1)} | Brightness: {qualityData.brightnessScore.toFixed(1)} | AI Score: {qualityData.qualityScore.toFixed(1)}%
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {qualityData ? (
+                      qualityData.isValidForTraining ? (
+                        <span className="bg-emerald-100 text-emerald-700 border border-emerald-300 px-5 py-1.5 rounded-full font-black text-sm uppercase tracking-wider shadow-sm animate-pulse">
+                          true
+                        </span>
+                      ) : (
+                        <span className="bg-red-100 text-red-700 border border-red-300 px-5 py-1.5 rounded-full font-black text-sm uppercase tracking-wider shadow-sm">
+                          false
+                        </span>
+                      )
+                    ) : (
+                      <span className="bg-gray-100 text-gray-400 px-5 py-1.5 rounded-full font-black text-sm uppercase shadow-sm">
+                        loading
+                      </span>
+                    )}
+                  </div>
+                </div>
+
               </div>
             )}
           </div>
@@ -564,7 +613,7 @@ const SkinDiseasePredictor = () => {
                 </div>
                 Informasi Lengkap
               </h2>
-              
+
               <div className="space-y-8">
                 {/* Deskripsi */}
                 <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-6 border border-white/20">
@@ -649,7 +698,7 @@ const SkinDiseasePredictor = () => {
                 </div>
                 Cara Penggunaan & Teknologi AI
               </h2>
-              
+
               <div className="space-y-6">
                 {[
                   { icon: '1', title: 'Upload Gambar', desc: 'Pilih foto kulit yang jelas dan berkualitas baik dengan pencahayaan yang cukup' },
