@@ -1,52 +1,12 @@
 [
     {
         "version": "model_v3",
-        "model_path": "C:\\Users\\umifi\\Downloads\\SyifAI-n8n\\skin-detector\\backend\\trained_models\\Fix_best_model_v3.pth",
-        "accuracy": "74.2%",
-        "final_loss": 2.7778,
-        "total_data_retrain": 5,
-        "execution_time": 293.81,
-        "retrained_at": "2026-06-01 20:12:37",
-        "status": "archived"
-    },
-    {
-        "version": "model_v4",
-        "model_path": "C:\\Users\\umifi\\Downloads\\SyifAI-n8n\\skin-detector\\backend\\trained_models\\Fix_best_model_v4.pth",
-        "accuracy": "74.51%",
-        "final_loss": 3.3382,
-        "total_data_retrain": 10,
-        "execution_time": 3.28,
-        "retrained_at": "2026-06-01 21:34:25",
-        "status": "archived"
-    },
-    {
-        "version": "model_v5",
-        "model_path": "C:\\Users\\umifi\\Downloads\\SyifAI-n8n\\skin-detector\\backend\\trained_models\\Fix_best_model_v5.pth",
-        "accuracy": "74.78%",
-        "final_loss": 2.8495,
-        "total_data_retrain": 15,
-        "execution_time": 5.28,
-        "retrained_at": "2026-06-01 21:42:49",
-        "status": "archived"
-    },
-    {
-        "version": "model_v6",
-        "model_path": "C:\\Users\\umifi\\Downloads\\SyifAI-n8n\\skin-detector\\backend\\trained_models\\Fix_best_model_v6.pth",
-        "accuracy": "75.11%",
-        "final_loss": 3.5293,
-        "total_data_retrain": 20,
-        "execution_time": 9.35,
-        "retrained_at": "2026-06-01 22:12:18",
-        "status": "archived"
-    },
-    {
-        "version": "model_v7",
-        "model_path": "C:\\Users\\umifi\\Downloads\\SyifAI-n8n\\skin-detector\\backend\\trained_models\\Fix_best_model_v7.pth",
-        "accuracy": "75.35%",
-        "final_loss": 3.7986,
-        "total_data_retrain": 25,
-        "execution_time": 17.71,
-        "retrained_at": "2026-06-02 16:45:42",
-        "status": "active"
+        "model_path": "Fix_best_model_v3.pth",
+        "accuracy": "70.0%",
+        "final_loss": 0.4215,
+        "total_data_retrain": 6,
+        "execution_time": "5.66s",
+        "retrained_at": "2026-06-04 15:19:13",
+        "status": "Production (Best)"
     }
 ]
