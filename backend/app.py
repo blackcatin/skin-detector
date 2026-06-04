@@ -11,7 +11,7 @@ import tempfile
 
 from dotenv import load_dotenv
 load_dotenv()
-
+from model_registry import get_current_model_version_name
 from fastapi import UploadFile, File
 from fastapi import Request
 from huggingface_hub import HfApi
@@ -93,35 +93,39 @@ def build_model(num_classes: int):
 
     return model
 
-# ===============================
-# LOAD MODEL DYNAMICALLY
-# ===============================
+# ===============================================================
+# LOAD MODEL DYNAMICALLY (FIXED SINKRON & ZERO-STORAGE SAFE)
+# ===============================================================
 model_path = get_current_model_path()
 model = None
-MODEL_VERSION = "model_v1"
 
-if os.path.exists(model_path):
-    filename_pth = os.path.basename(model_path)
-    if "Fix_best_" in filename_pth:
-        MODEL_VERSION = filename_pth.replace("Fix_best_", "").replace(".pth", "")
+# Ambil string nama versi model terkuat dari manifest teks murni (anti-amnesa v1)
+MODEL_VERSION = get_current_model_version_name()
+print(f"📦 [Registry Manifest] Versi model aktif yang diakui sistem: {MODEL_VERSION}")
 
 try:
-    ckpt = torch.load(
-        model_path,
-        map_location="cpu",
-        weights_only=False
-    )
+    # Lakukan load hanya jika file fisik .pth master masih tersedia di lokal
+    if os.path.exists(model_path) and os.path.basename(model_path) != "model_v1.pth":
+        filename_pth = os.path.basename(model_path)
+        ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
 
-    if isinstance(ckpt, dict):
-        model = build_model(num_classes=23)
-        model.load_state_dict(ckpt)
-        print(f"✅ Model berhasil dimuat dari state_dict: {filename_pth}")
+        if isinstance(ckpt, dict):
+            model = build_model(num_classes=23)
+            model.load_state_dict(ckpt)
+            print(f"✅ Model berhasil dimuat ke RAM dari file lokal: {filename_pth}")
+        else:
+            model = ckpt
+            print(f"✅ Model berhasil dimuat ke RAM sebagai full model: {filename_pth}")
+            
     else:
-        model = ckpt
-        print("✅ Model berhasil dimuat sebagai full model.")
+        # Skenario Zero-Storage: File fisik .pth sudah berada aman di Hugging Face Cloud.
+        # Kita panggil default arsitektur kosong ke RAM untuk siaga menerima retraining baru.
+        print(f"ℹ️ [Zero-Storage Info] Berkas bobot biner {MODEL_VERSION} tersimpan di Hugging Face Cloud Registry.")
+        print("🏋️ [RAM Bootstrap] Arsitektur ResNet18 berhasil disiagakan di memori lokal server.")
+        model = build_model(num_classes=23)
 
 except Exception as e:
-    print("❌ Gagal memuat model aktif, beralih ke arsitektur default:", e)
+    print("⚠️ Gagal memuat bobot model dari lokal, mengaktifkan arsitektur default:", e)
     model = build_model(num_classes=23)
 
 if model:
@@ -358,11 +362,19 @@ async def trigger_retraining():
         
         print("🏋️ [MLOps Pipeline] Gambar sukses masuk ke folder penyakit. Memulai training ResNet18...")
         
-        # 3. Hitung penamaan versi model baru otomatis
-        existing_models = [f for f in os.listdir(TARGET_MODEL_DIR) if f.endswith('.pth')]
-        next_version = len(existing_models) + 2 
+        # ===============================================================
+        # 3. FIX LOGIKA: HITUNG PENAMAAN VERSI BERDASARKAN POINTER MANIFEST TEXT
+        # ===============================================================
+        # Membaca current_model.txt tanpa peduli fisik .pth ada atau tidak
+        current_version_name = get_current_model_version_name()  # Hasilnya contoh: "model_v3"
         
-        NEW_MODEL_VERSION = f"model_v{next_version}"
+        try:
+            current_version_num = int(current_version_name.replace("model_v", ""))
+            next_version = current_version_num + 1
+        except Exception:
+            next_version = 2  # Fallback jika string corrupt
+        
+        NEW_MODEL_VERSION = f"model_v{next_version}"  # Otomatis melompat ke "model_v4"!
         new_model_name = f"Fix_best_{NEW_MODEL_VERSION}.pth"
         new_model_path = os.path.join(TARGET_MODEL_DIR, new_model_name)
         
@@ -408,14 +420,12 @@ async def trigger_retraining():
                     
             if is_best:
                 print(f"👑 [MLOps Registry] Model baru dinyatakan TERBAIK! ({raw_accuracy} >= {current_best_accuracy})")
-                # ❌ KODE PUSH HF MANUAL DI SINI SEKARANG DIHAPUS TOTAL!
-                # Tugas mengunggah file .pth seberat 44MB didelegasikan sepenuhnya ke n8n Node.
             else:
                 print(f"❌ [MLOps Registry] Model baru tidak lebih baik dari rekor terbaik ({current_best_accuracy}).")
 
         execution_time = round(time.time() - start_time, 2)
         
-        # 6. Update Model Registry Local JSON
+        # 6. Update Model Registry Local JSON & current_model.txt pointer
         model_accuracy = f"{float(raw_accuracy) * 100:.1f}%" if float(raw_accuracy) <= 1.0 else f"{float(raw_accuracy):.1f}%"
         model_time = time.strftime("%Y-%m-%d %H:%M:%S") 
         try:
@@ -480,7 +490,7 @@ async def trigger_retraining():
             "dataset_saved_at": "",
             "error": str(e)
         }
-    
+        
 @app.post("/upload-model")
 async def upload_model(request: Request):
     print("=== UPLOAD REQUEST (RAW BINARY MODE) ===")

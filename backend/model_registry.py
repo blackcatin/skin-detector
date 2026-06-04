@@ -19,10 +19,31 @@ def get_model_history():
     except Exception:
         return []
 
+def get_current_model_version_name():
+    """
+    FIX LOGIKA MLOps ZERO-STORAGE:
+    Mengambil string nama versi model aktif langsung dari manifes pointer teks.
+    Fungsi ini sengaja MENGABAIKAN os.path.exists() pada file .pth karena fisik file
+    memang sengaja dimusnahkan lokal dan disimpan di Hugging Face Cloud.
+    """
+    if not os.path.exists(CURRENT_MODEL_FILE):
+        return "model_v1"  # Fallback awal jika file belum terbentuk
+    
+    try:
+        with open(CURRENT_MODEL_FILE, "r", encoding="utf-8") as f:
+            model_name = f.read().strip()  # Mengambil contoh teks: 'Fix_best_model_v3.pth'
+        
+        if "Fix_best_" in model_name:
+            return model_name.replace("Fix_best_", "").replace(".pth", "")
+        return "model_v1"
+    except Exception:
+        return "model_v1"
+
 def get_current_model_path():
     """
     Mengambil path model aktif saat ini (Production).
     Jika file pointer belum ada, otomatis beralih ke model awal (model_v1.pth).
+    Catatan: Tetap dipertahankan untuk kebutuhan checking internal backend.
     """
     os.makedirs(MODEL_DIR, exist_ok=True)
     if not os.path.exists(CURRENT_MODEL_FILE):
@@ -94,7 +115,7 @@ def update_model_path(new_model_path, version, accuracy, final_loss, total_data_
     # 3. Buat catatan entri log baru yang terstruktur untuk JSON history
     new_entry = {
         "version": version,
-        "model_path": filename_new, # Simpan nama filenya saja agar ringkas
+        "model_path": filename_new,  # Simpan nama filenya saja agar ringkas
         "accuracy": f"{current_acc_float}%",
         "final_loss": final_loss,
         "total_data_retrain": total_data_retrain,
@@ -114,3 +135,4 @@ def update_model_path(new_model_path, version, accuracy, final_loss, total_data_
 if __name__ == "__main__":
     print("=== Model Registry Test ===")
     print("Model aktif saat ini:", get_current_model_path())
+    print("Nama versi model aktif saat ini:", get_current_model_version_name())
