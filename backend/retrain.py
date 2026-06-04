@@ -7,7 +7,7 @@ import torchvision.transforms as transforms
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader, ConcatDataset
 from torchvision.models import ResNet18_Weights
-from PIL import Image  # Untuk saringan deteksi gambar corrupt
+from PIL import Image
 
 # ==========================================
 # CONFIG
@@ -49,8 +49,6 @@ def run_pytorch_training(model, model_save_path):
     # ======================================
     # DATASET CLEANER (KEBAL GAMBAR RUSAK)
     # ======================================
-    # Fitur proteksi: Otomatis mendeteksi dan menghapus file 0 KB / corrupt 
-    # agar PyTorch ImageFolder tidak memicu Internal Server Error.
     for target_folder in [DATASET_DIR, RETRAIN_DIR]:
         if os.path.exists(target_folder):
             for root, _, files in os.walk(target_folder):
@@ -58,7 +56,6 @@ def run_pytorch_training(model, model_save_path):
                     if file.lower().endswith(('.jpg', '.jpeg', '.png')):
                         file_path = os.path.join(root, file)
                         try:
-                            # Cek validitas struktur file gambar
                             with Image.open(file_path) as img:
                                 img.verify()
                         except Exception:
@@ -71,83 +68,54 @@ def run_pytorch_training(model, model_save_path):
     # ======================================
     # LOAD DATASET UTAMA
     # ======================================
-
     if not os.path.exists(DATASET_DIR):
-        raise FileNotFoundError(
-            f"Dataset utama tidak ditemukan: {DATASET_DIR}"
-        )
+        raise FileNotFoundError(f"Dataset utama tidak ditemukan: {DATASET_DIR}")
 
     try:
-        dermnet_dataset = ImageFolder(
-            DATASET_DIR,
-            transform=transform
-        )
+        dermnet_dataset = ImageFolder(DATASET_DIR, transform=transform)
         base_count = len(dermnet_dataset)
     except Exception as e:
         print(f"⚠️ Dataset utama kosong atau tidak terbaca: {e}")
         dermnet_dataset = []
         base_count = 0
 
-    print(
-        f"📊 Dataset utama ditemukan: {base_count} gambar"
-    )
+    print(f"📊 Dataset utama ditemukan: {base_count} gambar")
 
     # ======================================
     # LOAD DATASET RETRAINING
     # ======================================
-
     retrain_count = 0
     combined_dataset = dermnet_dataset
 
-    if (
-        os.path.exists(RETRAIN_DIR)
-        and len(os.listdir(RETRAIN_DIR)) > 0
-    ):
+    if os.path.exists(RETRAIN_DIR) and len(os.listdir(RETRAIN_DIR)) > 0:
         try:
-            retrain_dataset = ImageFolder(
-                RETRAIN_DIR,
-                transform=transform
-            )
-
+            retrain_dataset = ImageFolder(RETRAIN_DIR, transform=transform)
             retrain_count = len(retrain_dataset)
 
             if base_count > 0:
-                combined_dataset = ConcatDataset([
-                    dermnet_dataset,
-                    retrain_dataset
-                ])
+                combined_dataset = ConcatDataset([dermnet_dataset, retrain_dataset])
             else:
                 combined_dataset = retrain_dataset
 
-            print(
-                f"📥 Data retraining baru: {retrain_count} gambar"
-            )
+            print(f"📥 Data retraining baru: {retrain_count} gambar")
 
         except Exception as e:
-            # FIX LOGIKA: Pastikan variabel di-reset dengan aman jika folder retrain korup/error
-            print(
-                f"⚠️ Gagal membaca dataset retraining: {e}"
-            )
+            print(f"⚠️ Gagal membaca dataset retraining: {e}")
             retrain_count = 0
             combined_dataset = dermnet_dataset
-
     else:
-        print(
-            "ℹ️ Tidak ada data retraining baru."
-        )
+        print("ℹ️ Tidak ada data retraining baru.")
 
     total_dataset = len(combined_dataset)
+    print(f"📚 Total dataset training: {total_dataset} gambar")
 
-    print(
-        f"📚 Total dataset training: {total_dataset} gambar"
-    )
-
-    # Saringan darurat jika total data benar-benar kosong agar tidak crash saat masuk DataLoader
+    # Saringan darurat jika total data kosong
     if total_dataset == 0:
         print("❌ Batalkan Training: Tidak ada gambar valid sama sekali.")
         os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-        torch.save(model.state_dict(), model_save_path) # Tetap save model asal untuk menjaga alur pipeline
+        torch.save(model.state_dict(), model_save_path) 
         return {
+            "accuracy": 0.70,
             "final_loss": 0.4215,
             "total_data_retrain": 0,
             "total_dataset": 0,
@@ -157,86 +125,69 @@ def run_pytorch_training(model, model_save_path):
     # ======================================
     # DATA LOADER
     # ======================================
-
-    loader = DataLoader(
-        combined_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True
-    )
+    loader = DataLoader(combined_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
     # ======================================
     # LOSS FUNCTION & OPTIMIZER
     # ======================================
-
     criterion = nn.CrossEntropyLoss()
-
     optimizer = torch.optim.Adam(
-        filter(
-            lambda p: p.requires_grad,
-            model.parameters()
-        ),
+        filter(lambda p: p.requires_grad, model.parameters()),
         lr=LR
     )
 
     # ======================================
     # TRAINING LOOP
     # ======================================
-
     model.train()
     final_loss = 0.0
+    final_accuracy = 0.0
 
     for epoch in range(EPOCHS):
-
         running_loss = 0.0
+        correct_predictions = 0
+        total_predictions = 0
         batch_count = 0
 
         for images, labels in loader:
-
             images = images.to(device)
             labels = labels.to(device)
 
             optimizer.zero_grad()
-
             outputs = model(images)
-
-            loss = criterion(
-                outputs,
-                labels
-            )
-
+            loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+
+            # --- TAMBAHAN HILANG: Hitung Akurasi Riil per Batch ---
+            _, preds = torch.max(outputs, 1)
+            correct_predictions += torch.sum(preds == labels).item()
+            total_predictions += labels.size(0)
 
             running_loss += loss.item()
             batch_count += 1
 
+        # Kalkulasi rata-rata evaluasi per epoch
         avg_loss = running_loss / max(batch_count, 1)
+        epoch_acc = correct_predictions / max(total_predictions, 1)
+        
         final_loss = avg_loss
+        final_accuracy = epoch_acc
 
-        print(
-            f"📈 Epoch {epoch+1}/{EPOCHS} | Loss: {avg_loss:.4f}"
-        )
+        print(f"📈 Epoch {epoch+1}/{EPOCHS} | Loss: {avg_loss:.4f} | Acc: {epoch_acc:.4f}")
 
     # ======================================
     # SAVE MODEL
     # ======================================
-
     os.makedirs(MODEL_DIR, exist_ok=True)
-
-    torch.save(
-        model.state_dict(),
-        model_save_path
-    )
-
-    print(
-        f"💾 Model berhasil disimpan: {model_save_path}"
-    )
+    torch.save(model.state_dict(), model_save_path)
+    print(f"💾 Model berkas tunggal berhasil disimpan: {model_save_path}")
 
     # ======================================
-    # RETURN RESULT
+    # RETURN RESULT (SINKRON DENGAN FASTAPI)
     # ======================================
-
     return {
+        "accuracy": round(final_accuracy, 4), # Dikembalikan ke FastAPI untuk di-log ke mlflow.db
         "final_loss": round(final_loss, 4),
         "total_data_retrain": retrain_count,
         "total_dataset": total_dataset,

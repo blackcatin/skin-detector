@@ -33,8 +33,6 @@ def get_current_model_path():
             model_name = f.read().strip()
         
         full_path = os.path.join(MODEL_DIR, model_name)
-        # Safe Fallback Fisik: Jika di teks ada namanya tapi file fisiknya hilang, 
-        # oper ke model default agar server web tidak crash
         if os.path.exists(full_path):
             return full_path
         return os.path.join(MODEL_DIR, DEFAULT_MODEL)
@@ -50,7 +48,8 @@ def update_current_pointer(filename_pth):
 def update_model_path(new_model_path, version, accuracy, final_loss, total_data_retrain, execution_time):
     """
     Logika Inti MLOps: Menyaring model terbaik.
-    Membandingkan akurasi model baru dengan akurasi model-model terbaik sebelumnya.
+    Membandingkan akurasi model baru dengan riwayat masa lalu.
+    Jika gagal, file fisik .pth langsung dimusnahkan demi menghemat storage lokal.
     """
     history = get_model_history()
     filename_new = os.path.basename(new_model_path)
@@ -59,7 +58,6 @@ def update_model_path(new_model_path, version, accuracy, final_loss, total_data_
     best_accuracy_so_far = 0.0
     for item in history:
         try:
-            # Bersihkan tanda persen (%) jika ada untuk dikonversi ke float
             acc_val = float(str(item.get("accuracy", "0")).replace("%", ""))
             if acc_val > best_accuracy_so_far:
                 best_accuracy_so_far = acc_val
@@ -75,7 +73,6 @@ def update_model_path(new_model_path, version, accuracy, final_loss, total_data_
     # 2. SELEKSI KUALITAS: Apakah model baru ini adalah yang TERBAIK?
     is_best_model = False
     
-    # Jika history kosong (retraining pertama) ATAU akurasi baru lebih tinggi dari yang terbaik sebelumnya
     if len(history) == 0 or current_acc_float > best_accuracy_so_far:
         is_best_model = True
         # Naik pangkat jadi Production: Update pointer agar web menggunakan file .pth baru ini
@@ -83,13 +80,21 @@ def update_model_path(new_model_path, version, accuracy, final_loss, total_data_
         status_label = "Production (Best)"
         print(f"🏆 [MLOps Registry] Model Baru {version} LEBIH AKURAT ({current_acc_float}%)! Diaktifkan ke Production.")
     else:
-        status_label = "Staging (Archived)"
-        print(f"⚠️ [MLOps Registry] Model Baru {version} memiliki akurasi ({current_acc_float}%) <= model terbaik lama ({best_accuracy_so_far}%). Disimpan sebagai arsip.")
+        status_label = "Staging (Rejected & Deleted)"
+        print(f"⚠️ [MLOps Registry] Model Baru {version} gagal mengalahkan rekor terbaik ({best_accuracy_so_far}%).")
+        
+        # 🔥 CRITICAL CLEANUP: Hapus file fisik .pth yang gagal agar tidak menumpuk di server lokal!
+        if os.path.exists(new_model_path):
+            try:
+                os.remove(new_model_path)
+                print(f"🗑️ [Zero-Storage] Berkas gagal {filename_new} seberat ~44MB telah dimusnahkan dari lokal server.")
+            except Exception as e:
+                print(f"⚠️ Gagal menghapus berkas model cadangan: {e}")
 
-    # 3. Buat catatan entri log baru yang terstruktur untuk n8n
+    # 3. Buat catatan entri log baru yang terstruktur untuk JSON history
     new_entry = {
         "version": version,
-        "model_path": new_model_path,
+        "model_path": filename_new, # Simpan nama filenya saja agar ringkas
         "accuracy": f"{current_acc_float}%",
         "final_loss": final_loss,
         "total_data_retrain": total_data_retrain,
