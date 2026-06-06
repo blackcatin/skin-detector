@@ -1,116 +1,180 @@
 import os
 import json
+import shutil
 from datetime import datetime
 
-# Mengunci path secara dinamis agar folder trained_models berada di jalur yang benar
+# ==========================================
+# PATH CONFIG
+# ==========================================
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(CURRENT_DIR, "trained_models")
+
+MODEL_DIR    = os.path.join(CURRENT_DIR, "trained_models")
+ACTIVE_DIR   = os.path.join(MODEL_DIR, "active")
+REJECTED_DIR = os.path.join(MODEL_DIR, "rejected")
+
 CURRENT_MODEL_FILE = os.path.join(MODEL_DIR, "current_model.txt")
 REGISTRY_JSON_FILE = os.path.join(CURRENT_DIR, "model_history.json")
-DEFAULT_MODEL = "model_v1.pth"
 
-def get_model_history():
-    """Mengambil seluruh riwayat latihan model dari file JSON."""
+DEFAULT_MODEL = "Fix_best_model_v1.pth"
+
+for d in [MODEL_DIR, ACTIVE_DIR, REJECTED_DIR]:
+    os.makedirs(d, exist_ok=True)
+
+
+# ==========================================
+# UTIL
+# ==========================================
+def load_history():
     if not os.path.exists(REGISTRY_JSON_FILE):
         return []
     try:
         with open(REGISTRY_JSON_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except:
         return []
 
-def get_current_model_path():
-    """
-    Mengambil path model aktif saat ini (Production).
-    Jika file pointer belum ada, otomatis beralih ke model awal (model_v1.pth).
-    """
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    if not os.path.exists(CURRENT_MODEL_FILE):
-        return os.path.join(MODEL_DIR, DEFAULT_MODEL)
-    
-    try:
-        with open(CURRENT_MODEL_FILE, "r", encoding="utf-8") as f:
-            model_name = f.read().strip()
-        
-        full_path = os.path.join(MODEL_DIR, model_name)
-        if os.path.exists(full_path):
-            return full_path
-        return os.path.join(MODEL_DIR, DEFAULT_MODEL)
-    except Exception:
-        return os.path.join(MODEL_DIR, DEFAULT_MODEL)
 
-def update_current_pointer(filename_pth):
-    """Mengubah isi file current_model.txt untuk menunjuk ke otak model yang aktif."""
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    with open(CURRENT_MODEL_FILE, "w", encoding="utf-8") as f:
-        f.write(filename_pth)
-
-def update_model_path(new_model_path, version, accuracy, final_loss, total_data_retrain, execution_time):
-    """
-    Logika Inti MLOps: Menyaring model terbaik.
-    Membandingkan akurasi model baru dengan riwayat masa lalu.
-    Jika gagal, file fisik .pth langsung dimusnahkan demi menghemat storage lokal.
-    """
-    history = get_model_history()
-    filename_new = os.path.basename(new_model_path)
-    
-    # 1. Cari berapa nilai akurasi tertinggi (Best Accuracy) dari riwayat masa lalu
-    best_accuracy_so_far = 0.0
-    for item in history:
-        try:
-            acc_val = float(str(item.get("accuracy", "0")).replace("%", ""))
-            if acc_val > best_accuracy_so_far:
-                best_accuracy_so_far = acc_val
-        except ValueError:
-            continue
-
-    # Konversi akurasi model baru yang dikirim dari proses training
-    try:
-        current_acc_float = float(str(accuracy).replace("%", ""))
-    except ValueError:
-        current_acc_float = 74.20  # Fallback baseline jika terjadi kegagalan baca
-    
-    # 2. SELEKSI KUALITAS: Apakah model baru ini adalah yang TERBAIK?
-    is_best_model = False
-    
-    if len(history) == 0 or current_acc_float > best_accuracy_so_far:
-        is_best_model = True
-        # Naik pangkat jadi Production: Update pointer agar web menggunakan file .pth baru ini
-        update_current_pointer(filename_new)
-        status_label = "Production (Best)"
-        print(f"🏆 [MLOps Registry] Model Baru {version} LEBIH AKURAT ({current_acc_float}%)! Diaktifkan ke Production.")
-    else:
-        status_label = "Staging (Rejected & Deleted)"
-        print(f"⚠️ [MLOps Registry] Model Baru {version} gagal mengalahkan rekor terbaik ({best_accuracy_so_far}%).")
-        
-        # 🔥 CRITICAL CLEANUP: Hapus file fisik .pth yang gagal agar tidak menumpuk di server lokal!
-        if os.path.exists(new_model_path):
-            try:
-                os.remove(new_model_path)
-                print(f"🗑️ [Zero-Storage] Berkas gagal {filename_new} seberat ~44MB telah dimusnahkan dari lokal server.")
-            except Exception as e:
-                print(f"⚠️ Gagal menghapus berkas model cadangan: {e}")
-
-    # 3. Buat catatan entri log baru yang terstruktur untuk JSON history
-    new_entry = {
-        "version": version,
-        "model_path": filename_new, # Simpan nama filenya saja agar ringkas
-        "accuracy": f"{current_acc_float}%",
-        "final_loss": final_loss,
-        "total_data_retrain": total_data_retrain,
-        "execution_time": f"{execution_time}s",
-        "retrained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "status": status_label
-    }
-    
-    history.append(new_entry)
-    
-    # 4. Simpan kembali ke berkas model_history.json
+def save_history(history):
     with open(REGISTRY_JSON_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=4, ensure_ascii=False)
-        
-    return new_entry
 
-if __name__ == "__main__":
-    print("=== Model Registry Test ===")
-    print("Model aktif saat ini:", get_current_model_path())
+
+def update_pointer(model_filename):
+    with open(CURRENT_MODEL_FILE, "w", encoding="utf-8") as f:
+        f.write(model_filename)
+    print(f"📌 current_model.txt diupdate → {model_filename}")
+
+
+def get_current_active_filename() -> str:
+    if not os.path.exists(CURRENT_MODEL_FILE):
+        return DEFAULT_MODEL
+    try:
+        with open(CURRENT_MODEL_FILE, "r") as f:
+            name = f.read().strip()
+        if not name.endswith(".pth"):
+            name += ".pth"
+        return name
+    except:
+        return DEFAULT_MODEL
+
+
+# ==========================================
+# CORE REGISTRY
+# ==========================================
+def update_model_registry(
+    new_model_path,
+    version,
+    accuracy,
+    final_loss,
+    total_data_retrain,
+    execution_time,
+    upload_success=False
+):
+    history  = load_history()
+    filename = os.path.basename(new_model_path)
+
+    try:
+        acc = float(str(accuracy).replace("%", ""))
+    except:
+        acc = 0.0
+
+    best_accuracy = max(
+        [float(str(h.get("accuracy", "0")).replace("%", "")) for h in history],
+        default=0.0
+    )
+
+    is_best = acc > best_accuracy
+
+    # Tentukan old_filename SEBELUM blok if-else
+    old_filename = get_current_active_filename() if is_best else None
+
+    if is_best:
+        # Pindahkan model baru ke active/
+        active_path = os.path.join(ACTIVE_DIR, filename)
+        if os.path.exists(new_model_path):
+            shutil.copy2(new_model_path, active_path)
+            os.remove(new_model_path)
+            print(f"✅ Model baru disimpan ke active/: {filename}")
+
+        # Update pointer
+        update_pointer(filename)
+        status = "ACTIVE"
+
+    else:
+        # Model ditolak → simpan ke rejected/
+        rejected_path = os.path.join(REJECTED_DIR, filename)
+        if os.path.exists(new_model_path):
+            shutil.move(new_model_path, rejected_path)
+            print(f"❌ Model ditolak, disimpan ke rejected/: {filename}")
+        status = "REJECTED"
+
+    # Buat entry SETELAH semua variabel siap
+    entry = {
+        "version":                   version,
+        "model_path":                filename,
+        "accuracy":                  f"{acc}%",
+        "baseline_accuracy":       f"{best_accuracy}%",
+        "final_loss":                final_loss,
+        "total_data_retrain":        total_data_retrain,
+        "execution_time":            f"{execution_time}s",
+        "status":                    status,
+        "is_best_model":             is_best,
+        "previous_model_filename":   old_filename,
+        "timestamp":                 datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    history.append(entry)
+    save_history(history)
+
+    return entry
+
+
+# ==========================================
+# GET CURRENT MODEL PATH
+# ==========================================
+def get_current_model_path():
+    filename = get_current_active_filename()
+
+    active_path = os.path.join(ACTIVE_DIR, filename)
+    if os.path.exists(active_path):
+        return active_path
+
+    if os.path.exists(ACTIVE_DIR):
+        pth_files = sorted(
+            [f for f in os.listdir(ACTIVE_DIR) if f.endswith(".pth")],
+            reverse=True
+        )
+        if pth_files:
+            update_pointer(pth_files[0])
+            return os.path.join(ACTIVE_DIR, pth_files[0])
+
+    direct_path = os.path.join(MODEL_DIR, filename)
+    if os.path.exists(direct_path):
+        return direct_path
+
+    return active_path
+
+
+def get_current_model_version_name():
+    try:
+        return get_current_active_filename().replace(".pth", "")
+    except:
+        return "model_v1"
+
+
+# ==========================================
+# COMPAT LAYER
+# ==========================================
+def update_model_path(
+    new_model_path, version, accuracy, final_loss,
+    total_data_retrain, execution_time, upload_success=False
+):
+    return update_model_registry(
+        new_model_path=new_model_path,
+        version=version,
+        accuracy=accuracy,
+        final_loss=final_loss,
+        total_data_retrain=total_data_retrain,
+        execution_time=execution_time,
+        upload_success=upload_success
+    )
