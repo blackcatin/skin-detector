@@ -1,34 +1,29 @@
 import os
 import torch
 import torch.nn as nn
-import torchvision.models as models
 import torchvision.transforms as transforms
+import random  
 
-from torchvision.datasets import ImageFolder
-from torch.utils.data import DataLoader, ConcatDataset
-from torchvision.models import ResNet18_Weights
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from PIL import Image
+from torchvision import models
 
 # ==========================================
-# CONFIG
+# CONFIG PATH
 # ==========================================
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-DATASET_DIR = os.path.join(BASE_DIR, "dataset", "train")
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR   = os.path.join(BASE_DIR, "trained_models")
 RETRAIN_DIR = os.path.join(BASE_DIR, "uploads", "retraining")
-MODEL_DIR = os.path.join(BASE_DIR, "trained_models")
 
 BATCH_SIZE = 16
-EPOCHS = 3
-LR = 0.0001
+EPOCHS     = 3
+LR         = 0.0001
 
 device = torch.device("cpu")
 
 # ==========================================
 # TRANSFORM
 # ==========================================
-
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -39,119 +34,131 @@ transform = transforms.Compose([
 ])
 
 # ==========================================
-# TRAINING ENGINE
+# CLASS LABELS (sama persis dengan app.py)
 # ==========================================
+CLASS_LABELS = [
+    "Acne and Rosacea",
+    "Actinic Keratosis, Basal Cell Carcinoma & other Malignant Lesions",
+    "Atopic Dermatitis",
+    "Bullous Disease",
+    "Cellulitis, Impetigo & other Bacterial Infections",
+    "Eczema",
+    "Exanthems & Drug Eruptions",
+    "Hair Loss, Alopecia & other Hair Diseases",
+    "Herpes, HPV & other STDs",
+    "Light Diseases & Disorders of Pigmentation",
+    "Lupus & other Connective Tissue diseases",
+    "Melanoma, Skin Cancer, Nevi & Moles",
+    "Nail Fungus & other Nail Disease",
+    "Poison Ivy & other Contact Dermatitis",
+    "Psoriasis, Lichen Planus & related diseases",
+    "Scabies, Lyme Disease & other Infestations & Bites",
+    "Seborrheic Keratoses & other Benign Tumors",
+    "Systemic Disease",
+    "Tinea, Ringworm, Candidiasis & other Fungal Infections",
+    "Urticaria / Hives",
+    "Vascular Tumors",
+    "Vasculitis",
+    "Warts, Molluscum & other Viral Infections"
+]
+LABEL_TO_IDX = {label: idx for idx, label in enumerate(CLASS_LABELS)}
 
-def run_pytorch_training(model, model_save_path):
+# ==========================================
+# CUSTOM DATASET — pakai list dari DB
+# (tidak load folder 15K lagi)
+# ==========================================
+class SubsetDataset(Dataset):
+    """
+    Menerima list dict dari DB:
+    [{"image_path": "...", "predicted_class": "...", "source": "new/hard/stratified"}, ...]
+    """
+    def __init__(self, records: list):
+        # Filter hanya record yang file-nya benar-benar ada
+        self.records = [r for r in records if os.path.exists(r["image_path"])]
+        skipped = len(records) - len(self.records)
+        if skipped > 0:
+            print(f"⚠️ {skipped} file tidak ditemukan, dilewati.")
 
-    print("\n🏋️ [PyTorch Engine] Memulai fine-tuning ResNet18...")
+    def __len__(self):
+        return len(self.records)
 
-    # ======================================
-    # DATASET CLEANER (KEBAL GAMBAR RUSAK)
-    # ======================================
-    for target_folder in [DATASET_DIR, RETRAIN_DIR]:
-        if os.path.exists(target_folder):
-            for root, _, files in os.walk(target_folder):
-                for file in files:
-                    if file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                        file_path = os.path.join(root, file)
-                        try:
-                            with Image.open(file_path) as img:
-                                img.verify()
-                        except Exception:
-                            print(f"🗑️ [Mekanisme Proteksi] Menghapus file rusak/0KB: {file_path}")
-                            try:
-                                os.remove(file_path)
-                            except:
-                                pass
-
-    # ======================================
-    # LOAD DATASET UTAMA
-    # ======================================
-    if not os.path.exists(DATASET_DIR):
-        raise FileNotFoundError(f"Dataset utama tidak ditemukan: {DATASET_DIR}")
-
-    try:
-        dermnet_dataset = ImageFolder(DATASET_DIR, transform=transform)
-        base_count = len(dermnet_dataset)
-    except Exception as e:
-        print(f"⚠️ Dataset utama kosong atau tidak terbaca: {e}")
-        dermnet_dataset = []
-        base_count = 0
-
-    print(f"📊 Dataset utama ditemukan: {base_count} gambar")
-
-    # ======================================
-    # LOAD DATASET RETRAINING
-    # ======================================
-    retrain_count = 0
-    combined_dataset = dermnet_dataset
-
-    if os.path.exists(RETRAIN_DIR) and len(os.listdir(RETRAIN_DIR)) > 0:
+    def __getitem__(self, idx):
+        rec = self.records[idx]
         try:
-            retrain_dataset = ImageFolder(RETRAIN_DIR, transform=transform)
-            retrain_count = len(retrain_dataset)
-
-            if base_count > 0:
-                combined_dataset = ConcatDataset([dermnet_dataset, retrain_dataset])
-            else:
-                combined_dataset = retrain_dataset
-
-            print(f"📥 Data retraining baru: {retrain_count} gambar")
-
+            img = Image.open(rec["image_path"]).convert("RGB")
+            img = transform(img)
         except Exception as e:
-            print(f"⚠️ Gagal membaca dataset retraining: {e}")
-            retrain_count = 0
-            combined_dataset = dermnet_dataset
-    else:
-        print("ℹ️ Tidak ada data retraining baru.")
+            # Jika gambar corrupt, ganti dengan tensor kosong
+            print(f"⚠️ Gagal baca gambar: {rec['image_path']} — {e}")
+            img = torch.zeros(3, 224, 224)
 
-    total_dataset = len(combined_dataset)
-    print(f"📚 Total dataset training: {total_dataset} gambar")
+        label = LABEL_TO_IDX.get(rec["predicted_class"], 0)
+        return img, label, rec.get("source", "stratified")
 
-    # Saringan darurat jika total data kosong
-    if total_dataset == 0:
-        print("❌ Batalkan Training: Tidak ada gambar valid sama sekali.")
-        os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-        torch.save(model.state_dict(), model_save_path) 
-        return {
-            "accuracy": 0.70,
-            "final_loss": 0.4215,
-            "total_data_retrain": 0,
-            "total_dataset": 0,
-            "epochs": EPOCHS
-        }
 
-    # ======================================
-    # DATA LOADER
-    # ======================================
-    loader = DataLoader(combined_dataset, batch_size=BATCH_SIZE, shuffle=True)
+def build_weighted_loader(records: list) -> DataLoader:
+    """
+    Data baru dan hard examples diberi bobot 3x lebih tinggi
+    supaya model lebih fokus belajar dari data yang sulit.
+    """
+    dataset = SubsetDataset(records)
 
-    # ======================================
-    # LOSS FUNCTION & OPTIMIZER
-    # ======================================
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=LR
+    if len(dataset) == 0:
+        raise Exception("Semua file gambar tidak ditemukan. Training dibatalkan.")
+
+    weights = []
+    for rec in dataset.records:
+        source = rec.get("source", "stratified")
+        weights.append(3.0 if source in ("new", "hard") else 1.0)
+
+    sampler = WeightedRandomSampler(
+        weights=weights,
+        num_samples=len(weights),
+        replacement=True
     )
 
-    # ======================================
-    # TRAINING LOOP
-    # ======================================
+    return DataLoader(dataset, batch_size=BATCH_SIZE, sampler=sampler)
+
+
+# ==========================================
+# TRAINING ENGINE
+# ==========================================
+def run_pytorch_training(model_save_path, subset_records: list):
+    """
+    Menjalankan fine-tuning dengan strategi freezing layer dan rehearsal.
+    """
+    num_classes = len(CLASS_LABELS)
+    # 1. Panggil fungsi untuk load model yang sudah di-freeze
+    model = get_model_for_training(num_classes)
+    model = model.to(device) # Konsistensi device
+
+    print(f"\n🏋️ [PyTorch Engine] Memulai fine-tuning ResNet18...")
+    print(f"📊 Total subset: {len(subset_records)} data")
+    
+    # 2. Build Loader
+    loader = build_weighted_loader(subset_records)
+
+    # 3. Setup Training
+    criterion = nn.CrossEntropyLoss()
+    # Hanya optimalkan layer terakhir (fc) yang membutuhkan gradien
+    optimizer = torch.optim.Adam(
+        filter(lambda p: p.requires_grad, model.parameters()), 
+        lr=LR
+    )
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.7)
+
     model.train()
+
     final_loss = 0.0
     final_accuracy = 0.0
 
     for epoch in range(EPOCHS):
         running_loss = 0.0
-        correct_predictions = 0
-        total_predictions = 0
-        batch_count = 0
+        correct = 0
+        total = 0
 
-        for images, labels in loader:
-            images = images.to(device)
-            labels = labels.to(device)
+        for images, labels, _ in loader:
+            images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()
             outputs = model(images)
@@ -159,37 +166,52 @@ def run_pytorch_training(model, model_save_path):
             loss.backward()
             optimizer.step()
 
-            # --- TAMBAHAN HILANG: Hitung Akurasi Riil per Batch ---
             _, preds = torch.max(outputs, 1)
-            correct_predictions += torch.sum(preds == labels).item()
-            total_predictions += labels.size(0)
-
+            correct += (preds == labels).sum().item()
+            total += labels.size(0)
             running_loss += loss.item()
-            batch_count += 1
 
-        # Kalkulasi rata-rata evaluasi per epoch
-        avg_loss = running_loss / max(batch_count, 1)
-        epoch_acc = correct_predictions / max(total_predictions, 1)
-        
+        avg_loss = running_loss / max(1, len(loader))
+        acc = correct / max(1, total)
         final_loss = avg_loss
-        final_accuracy = epoch_acc
+        final_accuracy = acc
+        print(f"📈 Epoch {epoch+1}/{EPOCHS} | Loss: {avg_loss:.4f} | Acc: {acc:.4f}")
 
-        print(f"📈 Epoch {epoch+1}/{EPOCHS} | Loss: {avg_loss:.4f} | Acc: {epoch_acc:.4f}")
+    scheduler.step()
 
-    # ======================================
-    # SAVE MODEL
-    # ======================================
+    # 4. Simpan model
     os.makedirs(MODEL_DIR, exist_ok=True)
     torch.save(model.state_dict(), model_save_path)
-    print(f"💾 Model berkas tunggal berhasil disimpan: {model_save_path}")
+    print(f"💾 Model saved: {model_save_path}")
 
-    # ======================================
-    # RETURN RESULT (SINKRON DENGAN FASTAPI)
-    # ======================================
     return {
-        "accuracy": round(final_accuracy, 4), # Dikembalikan ke FastAPI untuk di-log ke mlflow.db
+        "accuracy": round(final_accuracy, 4),
         "final_loss": round(final_loss, 4),
-        "total_data_retrain": retrain_count,
-        "total_dataset": total_dataset,
+        "total_data_retrain": len(subset_records),
         "epochs": EPOCHS
     }
+
+def get_model_for_training(num_classes):
+    # 1. Load pre-trained ResNet18
+    model = models.resnet18(pretrained=True)
+    
+    # 2. FREEZE LAYERS (Strategi Efisiensi)
+    # Bekukan semua layer agar tidak dihitung gradiennya
+    for param in model.parameters():
+        param.requires_grad = False
+        
+    # 3. Ganti Fully Connected Layer (hanya layer ini yang akan dilatih)
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Linear(num_ftrs, num_classes)
+    
+    return model
+
+def get_training_subset(all_data, new_data_ids, sample_size_old=200):
+    """
+    Rehearsal Strategy:
+    Mengambil semua data baru + sampel acak data lama (Hard Examples)
+    """
+    new_data = [d for d in all_data if d['id'] in new_data_ids]
+    old_data_sample = random.sample([d for d in all_data if d['id'] not in new_data_ids], sample_size_old)
+    
+    return new_data + old_data_sample

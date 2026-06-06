@@ -1,138 +1,189 @@
 import os
 import json
 from datetime import datetime
+import shutil
 
-# Mengunci path secara dinamis agar folder trained_models berada di jalur yang benar
+# ==========================================
+# PATH CONFIG
+# ==========================================
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 MODEL_DIR = os.path.join(CURRENT_DIR, "trained_models")
+STAGING_DIR = os.path.join(MODEL_DIR, "staging")
+ACTIVE_DIR = os.path.join(MODEL_DIR, "active")
+REJECTED_DIR = os.path.join(MODEL_DIR, "rejected")
+
 CURRENT_MODEL_FILE = os.path.join(MODEL_DIR, "current_model.txt")
 REGISTRY_JSON_FILE = os.path.join(CURRENT_DIR, "model_history.json")
+
 DEFAULT_MODEL = "model_v1.pth"
 
-def get_model_history():
-    """Mengambil seluruh riwayat latihan model dari file JSON."""
+
+# ==========================================
+# INIT FOLDERS
+# ==========================================
+for d in [MODEL_DIR, STAGING_DIR, ACTIVE_DIR, REJECTED_DIR]:
+    os.makedirs(d, exist_ok=True)
+
+
+# ==========================================
+# UTIL
+# ==========================================
+def load_history():
     if not os.path.exists(REGISTRY_JSON_FILE):
         return []
     try:
         with open(REGISTRY_JSON_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except:
         return []
+
+
+def save_history(history):
+    with open(REGISTRY_JSON_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=4, ensure_ascii=False)
+
+
+def update_pointer(model_filename):
+    with open(CURRENT_MODEL_FILE, "w", encoding="utf-8") as f:
+        f.write(model_filename)
+
+
+# ==========================================
+# CORE SAFE REGISTRY
+# ==========================================
+def update_model_registry(
+    new_model_path,
+    version,
+    accuracy,
+    final_loss,
+    total_data_retrain,
+    execution_time,
+    upload_success=False
+):
+    history = load_history()
+    filename = os.path.basename(new_model_path)
+
+    try:
+        acc = float(str(accuracy).replace("%", ""))
+    except:
+        acc = 0.0
+
+    best_accuracy = max(
+        [float(str(h.get("accuracy", "0")).replace("%", "")) for h in history],
+        default=0.0
+    )
+
+    # ── 1. Tentukan status ──────────────────
+    is_best   = acc > best_accuracy
+    status    = "STAGING_BEST" if is_best else "REJECTED"
+    target_dir = STAGING_DIR if is_best else REJECTED_DIR
+
+    # ── 2. Pindahkan file (tidak dihapus) ───
+    new_location = os.path.join(target_dir, filename)
+    if os.path.exists(new_model_path):
+        shutil.move(new_model_path, new_location)
+
+    # ── 3. Promote jika upload sukses ───────
+    if is_best and upload_success:
+        active_path = os.path.join(ACTIVE_DIR, filename)
+        shutil.move(new_location, active_path)
+        update_pointer(filename)
+        status = "ACTIVE_PRODUCTION"
+
+    # ── 4. Simpan history ───────────────────
+    entry = {
+        "version":            version,
+        "model_path":         filename,
+        "accuracy":           f"{acc}%",
+        "final_loss":         final_loss,
+        "total_data_retrain": total_data_retrain,
+        "execution_time":     f"{execution_time}s",
+        "status":             status,
+        "upload_success":     upload_success,
+        "is_best_model":      is_best,
+        "timestamp":          datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    history.append(entry)
+    save_history(history)
+
+    return entry  # ← sekarang selalu tercapai
+
+
+# ── Compat layer — letakkan SETELAH fungsi utama ──
+def update_model_path(
+    new_model_path,
+    version,
+    accuracy,
+    final_loss,
+    total_data_retrain,
+    execution_time,
+    upload_success=False
+):
+    return update_model_registry(
+        new_model_path=new_model_path,
+        version=version,
+        accuracy=accuracy,
+        final_loss=final_loss,
+        total_data_retrain=total_data_retrain,
+        execution_time=execution_time,
+        upload_success=upload_success
+    )
+
+
+# ==========================================
+# GET CURRENT MODEL
+# ==========================================
+def get_current_model_path():
+    if not os.path.exists(CURRENT_MODEL_FILE):
+        # Fallback: cari file .pth terbaru langsung di trained_models/
+        pth_files = sorted(
+            [f for f in os.listdir(MODEL_DIR) if f.endswith(".pth") and os.path.isfile(os.path.join(MODEL_DIR, f))],
+            reverse=True
+        )
+        if pth_files:
+            return os.path.join(MODEL_DIR, pth_files[0])
+        return os.path.join(ACTIVE_DIR, DEFAULT_MODEL)
+
+    try:
+        with open(CURRENT_MODEL_FILE, "r") as f:
+            name = f.read().strip()
+
+        # Pastikan ada ekstensi .pth
+        if not name.endswith(".pth"):
+            name = name + ".pth"
+
+        # Cek di ACTIVE_DIR dulu, lalu fallback ke MODEL_DIR langsung
+        active_path = os.path.join(ACTIVE_DIR, name)
+        if os.path.exists(active_path):
+            return active_path
+
+        direct_path = os.path.join(MODEL_DIR, name)
+        if os.path.exists(direct_path):
+            return direct_path
+
+        return active_path  # biarkan app.py handle jika tidak ditemukan
+
+    except:
+        return os.path.join(ACTIVE_DIR, DEFAULT_MODEL)
 
 def get_current_model_version_name():
     """
-    FIX LOGIKA MLOps ZERO-STORAGE:
-    Mengambil string nama versi model aktif langsung dari manifes pointer teks.
-    Fungsi ini sengaja MENGABAIKAN os.path.exists() pada file .pth karena fisik file
-    memang sengaja dimusnahkan lokal dan disimpan di Hugging Face Cloud.
+    Ambil versi model aktif dari current_model.txt
     """
-    if not os.path.exists(CURRENT_MODEL_FILE):
-        return "model_v1"  # Fallback awal jika file belum terbentuk
-    
     try:
+        CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+        MODEL_DIR = os.path.join(CURRENT_DIR, "trained_models")
+        CURRENT_MODEL_FILE = os.path.join(MODEL_DIR, "current_model.txt")
+
+        if not os.path.exists(CURRENT_MODEL_FILE):
+            return "model_v1"
+
         with open(CURRENT_MODEL_FILE, "r", encoding="utf-8") as f:
-            model_name = f.read().strip()  # Mengambil contoh teks: 'Fix_best_model_v3.pth'
-        
-        if "Fix_best_" in model_name:
-            return model_name.replace("Fix_best_", "").replace(".pth", "")
+            filename = f.read().strip()
+
+        # model_v3.pth → model_v3
+        return filename.replace(".pth", "")
+    except:
         return "model_v1"
-    except Exception:
-        return "model_v1"
-
-def get_current_model_path():
-    """
-    Mengambil path model aktif saat ini (Production).
-    Jika file pointer belum ada, otomatis beralih ke model awal (model_v1.pth).
-    Catatan: Tetap dipertahankan untuk kebutuhan checking internal backend.
-    """
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    if not os.path.exists(CURRENT_MODEL_FILE):
-        return os.path.join(MODEL_DIR, DEFAULT_MODEL)
-    
-    try:
-        with open(CURRENT_MODEL_FILE, "r", encoding="utf-8") as f:
-            model_name = f.read().strip()
-        
-        full_path = os.path.join(MODEL_DIR, model_name)
-        if os.path.exists(full_path):
-            return full_path
-        return os.path.join(MODEL_DIR, DEFAULT_MODEL)
-    except Exception:
-        return os.path.join(MODEL_DIR, DEFAULT_MODEL)
-
-def update_current_pointer(filename_pth):
-    """Mengubah isi file current_model.txt untuk menunjuk ke otak model yang aktif."""
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    with open(CURRENT_MODEL_FILE, "w", encoding="utf-8") as f:
-        f.write(filename_pth)
-
-def update_model_path(new_model_path, version, accuracy, final_loss, total_data_retrain, execution_time):
-    """
-    Logika Inti MLOps: Menyaring model terbaik.
-    Membandingkan akurasi model baru dengan riwayat masa lalu.
-    Jika gagal, file fisik .pth langsung dimusnahkan demi menghemat storage lokal.
-    """
-    history = get_model_history()
-    filename_new = os.path.basename(new_model_path)
-    
-    # 1. Cari berapa nilai akurasi tertinggi (Best Accuracy) dari riwayat masa lalu
-    best_accuracy_so_far = 0.0
-    for item in history:
-        try:
-            acc_val = float(str(item.get("accuracy", "0")).replace("%", ""))
-            if acc_val > best_accuracy_so_far:
-                best_accuracy_so_far = acc_val
-        except ValueError:
-            continue
-
-    # Konversi akurasi model baru yang dikirim dari proses training
-    try:
-        current_acc_float = float(str(accuracy).replace("%", ""))
-    except ValueError:
-        current_acc_float = 74.20  # Fallback baseline jika terjadi kegagalan baca
-    
-    # 2. SELEKSI KUALITAS: Apakah model baru ini adalah yang TERBAIK?
-    is_best_model = False
-    
-    if len(history) == 0 or current_acc_float > best_accuracy_so_far:
-        is_best_model = True
-        # Naik pangkat jadi Production: Update pointer agar web menggunakan file .pth baru ini
-        update_current_pointer(filename_new)
-        status_label = "Production (Best)"
-        print(f"🏆 [MLOps Registry] Model Baru {version} LEBIH AKURAT ({current_acc_float}%)! Diaktifkan ke Production.")
-    else:
-        status_label = "Staging (Rejected & Deleted)"
-        print(f"⚠️ [MLOps Registry] Model Baru {version} gagal mengalahkan rekor terbaik ({best_accuracy_so_far}%).")
-        
-        # 🔥 CRITICAL CLEANUP: Hapus file fisik .pth yang gagal agar tidak menumpuk di server lokal!
-        if os.path.exists(new_model_path):
-            try:
-                os.remove(new_model_path)
-                print(f"🗑️ [Zero-Storage] Berkas gagal {filename_new} seberat ~44MB telah dimusnahkan dari lokal server.")
-            except Exception as e:
-                print(f"⚠️ Gagal menghapus berkas model cadangan: {e}")
-
-    # 3. Buat catatan entri log baru yang terstruktur untuk JSON history
-    new_entry = {
-        "version": version,
-        "model_path": filename_new,  # Simpan nama filenya saja agar ringkas
-        "accuracy": f"{current_acc_float}%",
-        "final_loss": final_loss,
-        "total_data_retrain": total_data_retrain,
-        "execution_time": f"{execution_time}s",
-        "retrained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "status": status_label
-    }
-    
-    history.append(new_entry)
-    
-    # 4. Simpan kembali ke berkas model_history.json
-    with open(REGISTRY_JSON_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=4, ensure_ascii=False)
-        
-    return new_entry
-
-if __name__ == "__main__":
-    print("=== Model Registry Test ===")
-    print("Model aktif saat ini:", get_current_model_path())
-    print("Nama versi model aktif saat ini:", get_current_model_version_name())

@@ -35,6 +35,8 @@ class Prediction(Base):
 
     # Retraining Tracking
     used_for_retraining = Column(Boolean, default=False)
+    confidence_score = Column(Float, nullable=True)        # ← TAMBAH INI
+    is_hard_example = Column(Boolean, default=False)       # ← TAMBAH INI
 
     # Model Version Tracking
     model_version = Column(String, nullable=False)
