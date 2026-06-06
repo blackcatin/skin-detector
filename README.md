@@ -1,70 +1,238 @@
-# Getting Started with Create React App
+# 🩺 SyifAI - Skin Disease Detector
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+SyifAI adalah aplikasi deteksi penyakit kulit berbasis AI yang menggunakan model ResNet18 untuk melakukan klasifikasi gambar penyakit kulit. Sistem dibangun menggunakan React, FastAPI, PyTorch, PostgreSQL, MLflow, dan n8n untuk mendukung otomatisasi retraining serta manajemen model secara end-to-end.
 
-## Available Scripts
+---
 
-In the project directory, you can run:
+## ✨ Features
 
-### `npm start`
+* 🖼️ Upload gambar penyakit kulit
+* 🤖 Prediksi menggunakan model ResNet18
+* 🌐 REST API dengan FastAPI
+* 📊 Experiment tracking dengan MLflow
+* 🗄️ Penyimpanan data menggunakan PostgreSQL
+* 🔄 Automated retraining menggunakan n8n
+* 🤗 Integrasi Hugging Face untuk model registry
+* ☁️ Backup model ke Google Drive
+* 📱 Notifikasi Telegram
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+---
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## 🛠️ Tech Stack
 
-### `npm test`
+### 🎨 Frontend
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+* React
+* Tailwind CSS
 
-### `npm run build`
+### ⚙️ Backend
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+* FastAPI
+* PyTorch
+* torchvision
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### 🗄️ Database
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+* PostgreSQL
 
-### `npm run eject`
+### 🚀 MLOps
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+* MLflow
+* n8n
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+### 💾 Model Storage
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+* Hugging Face Hub
+* Google Drive
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+---
 
-## Learn More
+## 📁 Project Structure
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+```text
+skin-detector/
+├── src/
+├── public/
+├── backend/
+│   ├── app.py
+│   ├── retrain.py
+│   ├── check_model.py
+│   ├── model_history.json
+│   └── trained_models/
+├── mlflow.db
+├── package.json
+└── README.md
+```
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+---
 
-### Code Splitting
+## 🚀 Getting Started
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+### 1️⃣ Clone Repository
 
-### Analyzing the Bundle Size
+```bash
+git clone https://github.com/blackcatin/skin-detector.git
+cd skin-detector
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+---
 
-### Making a Progressive Web App
+## 🎨 Frontend Setup
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+Install dependencies:
 
-### Advanced Configuration
+```bash
+npm install
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+Run development server:
 
-### Deployment
+```bash
+npm start
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+Frontend will run at:
 
-### `npm run build` fails to minify
+```text
+http://localhost:3000
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+---
+
+## ⚙️ Backend Setup
+
+Masuk ke folder backend:
+
+```bash
+cd backend
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Buat file `.env`:
+
+```env
+HF_TOKEN=your_huggingface_token
+```
+
+Jalankan backend:
+
+```bash
+uvicorn app:app --reload
+```
+
+Backend will run at:
+
+```text
+http://localhost:8000
+```
+
+---
+
+## 🗄️ PostgreSQL Setup
+
+Buat database PostgreSQL dan sesuaikan konfigurasi:
+
+```env
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=syifai
+DB_USER=postgres
+DB_PASSWORD=your_password
+```
+
+---
+
+## 📊 MLflow Setup
+
+Jalankan MLflow UI:
+
+```bash
+mlflow ui
+```
+
+Dashboard tersedia di:
+
+```text
+http://localhost:5000
+```
+
+MLflow digunakan untuk:
+
+* 📈 Tracking eksperimen training
+* 📊 Monitoring metric model
+* 🏆 Perbandingan performa model
+* 🔍 Evaluasi hasil retraining
+
+---
+
+## 🔌 API Endpoint
+
+### Predict Skin Disease
+
+```http
+POST /predict
+```
+
+Response:
+
+```json
+{
+  "prediction": "Melanoma",
+  "confidence": 0.95
+}
+```
+
+---
+
+## 🔄 Automated MLOps Workflow
+
+Workflow otomatis menggunakan n8n:
+
+```text
+Schedule Trigger
+      ↓
+PostgreSQL Check
+      ↓
+Retraining Trigger
+      ↓
+MLflow Logging
+      ↓
+Model Evaluation
+      ↓
+Best Model Selection
+      ↓
+Hugging Face Upload
+      ↓
+Google Drive Backup
+      ↓
+Telegram Notification
+      ↓
+Storage Cleanup
+```
+
+---
+
+## ⚠️ Important Notes
+
+Jangan pernah mengunggah file berikut ke repository:
+
+```text
+.env
+backend/.env
+```
+
+Gunakan environment variables untuk menyimpan credential dan token.
+
+---
+
+## 👨‍💻 Author
+
+**Firlana Umi**
+
+Faculty of Science and Technology
+Skin Disease Detection & MLOps Automation Project
