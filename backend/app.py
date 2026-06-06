@@ -24,6 +24,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from huggingface_hub import hf_hub_download
 from PIL import Image
+from model_registry import (
+    get_current_model_path,
+    get_current_model_version_name,
+    get_current_active_filename,   # ← pastikan ini ada
+    load_history,
+    update_model_registry
+)
 
 import torch
 import torchvision.transforms as transforms
@@ -41,6 +48,7 @@ from preprocessing import preprocess_image
 from model_registry import (
     get_current_model_path,
     get_current_model_version_name,
+    load_history,
     update_model_registry
 )
 from retrain import RETRAIN_DIR, run_pytorch_training
@@ -189,27 +197,61 @@ class_labels = [
 def root():
     return {"message": "Skin Detector API aktif 🚀", "active_model": MODEL_VERSION}
 
-# ===============================
-# DOWNLOAD MODEL
-# ===============================
+@app.get("/get-previous-model-info")
+def get_previous_model_info():
+    """
+    Dipanggil n8n SEBELUM training selesai — ambil info model yang
+    sedang aktif sekarang (yang akan menjadi 'model lama' setelah training).
+    """
+    current_filename = get_current_model_version_name() + ".pth"
+    current_path     = get_current_model_path()
+
+    if not os.path.exists(current_path):
+        return {"has_previous": False}
+
+    return {
+        "has_previous":    True,
+        "filename":        current_filename,
+        "path":            current_path,
+        "size_mb":         round(os.path.getsize(current_path) / 1024 / 1024, 2)
+    }
+
+
 @app.get("/download-model/{filename}")
 def download_model(filename: str, background_tasks: BackgroundTasks):
-    file_path = os.path.join(CURRENT_DIR, "trained_models", filename)
+    # Guard: jika filename kosong atau "None"
+    if not filename or filename == "None":
+        return {"status": "skipped", "message": "Tidak ada model lama untuk diarsip"}
 
-    if os.path.exists(file_path):
-        def auto_delete_master_file():
-            try:
-                time.sleep(2)
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    print(f"🗑️ [Zero-Storage Cleanup] {filename} dihapus dari trained_models!")
-            except Exception as delete_error:
-                print(f"⚠️ Gagal menghapus file master: {delete_error}")
+    search_dirs = [
+        os.path.join(CURRENT_DIR, "trained_models", "active"),
+        os.path.join(CURRENT_DIR, "trained_models"),
+    ]
 
-        background_tasks.add_task(auto_delete_master_file)
-        return FileResponse(file_path, media_type="application/octet-stream", filename=filename)
+    file_path = None
+    for d in search_dirs:
+        candidate = os.path.join(d, filename)
+        if os.path.exists(candidate):
+            file_path = candidate
+            break
 
-    return {"error": f"File {filename} tidak ditemukan di trained_models."}
+    if not file_path:
+        return {"error": f"File {filename} tidak ditemukan."}
+
+    # Tidak hapus file — model aktif harus tetap ada di lokal
+    return FileResponse(file_path, media_type="application/octet-stream", filename=filename)
+
+@app.get("/download-previous-model")
+def download_previous_model(background_tasks: BackgroundTasks):
+    history = load_history()  # dari model_registry
+    # Ambil model ACTIVE sebelumnya (index -2, karena -1 adalah yang baru)
+    active_models = [h for h in history if h["status"] == "ACTIVE"]
+    if len(active_models) < 2:
+        return {"error": "Tidak ada model lama untuk diarsip"}
+    
+    prev_model = active_models[-2]  # model sebelumnya
+    filename   = prev_model["model_path"]
+    # ... cari file dan return FileResponse
 
 # ===============================
 # PREDICT
@@ -396,6 +438,8 @@ async def trigger_retraining():
         # ── 6. Training ─────────────────────────────────────────────
         start_time      = time.time()
         training_result = run_pytorch_training(model, new_model_path, subset_records)
+        model.eval()  # ← WAJIB ditambah ini, kembalikan mode inference
+        print("🔄 Model dikembalikan ke mode eval setelah training.")
 
         if not os.path.exists(new_model_path) or os.path.getsize(new_model_path) < 1000:
             raise Exception("Training gagal menghasilkan model valid.")
@@ -419,16 +463,17 @@ async def trigger_retraining():
         print("✅ Training selesai.")
 
         return {
-            "status":             "success",
-            "is_best_model":      is_best,
-            "model_version":      NEW_MODEL_VERSION,
-            "model_path":         os.path.basename(new_model_path),
-            "accuracy":           f"{float(raw_accuracy) * 100:.1f}%",
-            "final_loss":         final_loss,
-            "total_data_retrain": len(subset_records),
-            "total_new_data":     len(new_samples),
-            "execution_time":     exec_time,
-            "retrained_at":       time.strftime("%Y-%m-%d %H:%M:%S")
+            "status":                    "success",
+            "is_best_model":             is_best,
+            "model_version":             NEW_MODEL_VERSION,
+            "model_path":                os.path.basename(new_model_path),
+            "previous_model_filename":   registry_result.get("previous_model_filename"),  # ← tambah ini
+            "accuracy":                  f"{float(raw_accuracy) * 100:.1f}%",
+            "final_loss":                final_loss,
+            "total_data_retrain":        len(subset_records),
+            "total_new_data":            len(new_samples),
+            "execution_time":            exec_time,
+            "retrained_at":              time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
     except Exception as e:
@@ -465,10 +510,14 @@ async def upload_model(request: Request):
         if not token:
             raise HTTPException(status_code=500, detail="HF_TOKEN tidak ditemukan di .env")
 
-        filename  = "Fix_best_model_latest.pth"
+        # Ambil nama file dari header Content-Disposition yang dikirim n8n
+        # n8n mengirim: attachment; filename="Fix_best_model_v3.pth"
+        filename  = "Fix_best_model_latest.pth"  # fallback
         cd_header = request.headers.get("content-disposition")
         if cd_header and "filename=" in cd_header:
-            filename = cd_header.split("filename=")[1].strip('"').strip("'")
+            raw_name = cd_header.split("filename=")[1].strip('"').strip("'").strip()
+            if raw_name and raw_name not in ("None", ""):
+                filename = raw_name
 
         temp_path = os.path.join(CURRENT_DIR, f"temp_{filename}")
         with open(temp_path, "wb") as f:
@@ -537,3 +586,40 @@ async def archive_retraining_data():
 
     finally:
         db.close()
+
+@app.get("/read-raw-image/{filename}")
+def read_raw_image(filename: str):
+    """Kirim file gambar raw sebagai binary untuk diupload n8n ke GDrive."""
+    path = os.path.join(RAW_FOLDER, filename)
+    if not os.path.exists(path):
+        raise HTTPException(404, f"File tidak ditemukan: {filename}")
+    return FileResponse(path, media_type="image/jpeg", filename=filename)
+
+# ===============================
+# DELETE OLD MODEL FROM LOCAL
+# ===============================
+@app.delete("/delete-old-model")
+def delete_old_model(filename: str):
+    if not filename or filename in ("None", ""):
+        return {"status": "skipped", "message": "Tidak ada filename yang diberikan"}
+
+    current_active = get_current_active_filename()
+    if filename == current_active:
+        return {
+            "status":  "skipped",
+            "message": f"File {filename} adalah model aktif saat ini, tidak dihapus"
+        }
+
+    search_dirs = [
+        os.path.join(CURRENT_DIR, "trained_models", "active"),
+        os.path.join(CURRENT_DIR, "trained_models"),
+    ]
+
+    for d in search_dirs:
+        target = os.path.join(d, filename)
+        if os.path.exists(target):
+            os.remove(target)
+            print(f"🗑️ Model lama dihapus dari lokal: {target}")
+            return {"status": "deleted", "filename": filename, "path": target}
+
+    return {"status": "not_found", "message": f"File {filename} tidak ditemukan di lokal"}

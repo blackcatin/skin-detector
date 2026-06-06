@@ -2,13 +2,14 @@
     {
         "version": "model_v2",
         "model_path": "Fix_best_model_v2.pth",
-        "accuracy": "0.0%",
-        "final_loss": 5.327,
-        "total_data_retrain": 5,
-        "execution_time": "2.25s",
-        "status": "REJECTED",
-        "upload_success": false,
-        "is_best_model": false,
-        "timestamp": "2026-06-06 16:04:47"
+        "accuracy": "82.5%",
+        "baseline_accuracy": "0.0%",
+        "final_loss": 0.7175,
+        "total_data_retrain": 15,
+        "execution_time": "61.66s",
+        "status": "ACTIVE",
+        "is_best_model": true,
+        "previous_model_filename": "Fix_best_model_v1.pth",
+        "timestamp": "2026-06-07 01:03:23"
     }
 ]
